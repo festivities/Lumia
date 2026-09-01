@@ -17,7 +17,10 @@ It uses Discord features like slash commands, interactive staff review alerts, a
 - **NVIDIA Nemotron Integration:** Robust API polling, retry logic with exponential backoff, and quota-friendly frame sampling for videos.
 
 ### Getting Started
-1. [Invite the bot](https://discord.com/oauth2/authorize?client_id=1544388935222952037&permissions=1099511688192&integration_type=0&scope=bot+applications.commands) to your server with appropriate permissions (Timeout Members, Manage Messages, etc).
+1. **Invite your bot** to your server with appropriate permissions (Timeout Members, Manage Messages, etc) using your Application Client ID:
+   ```text
+   https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=1099511688192&integration_type=0&scope=bot+applications.commands
+   ```
 2. You can view all configuration commands by typing `/lumia` in the text input field. All commands have clear descriptions.
 3. Configure monitored channels with `/lumia channel add <channel> [mode]`.
 4. Set a staff alert channel for reviews with `/lumia staffchannel <channel>`.
