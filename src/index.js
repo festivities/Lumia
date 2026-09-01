@@ -207,6 +207,14 @@ async function handleFalsePositiveApproval(interaction) {
     }
   }
 
+  let originalMessageContent = null;
+  const originalTextField = interaction.message.embeds[0]?.fields?.find(
+    (f) => f.name === 'Original Message' || f.name === 'Original Text'
+  );
+  if (originalTextField?.value) {
+    originalMessageContent = originalTextField.value;
+  }
+
   await interaction.deferUpdate();
 
   // 1. Lift member timeout
@@ -232,6 +240,10 @@ async function handleFalsePositiveApproval(interaction) {
           iconURL: interaction.user.displayAvatarURL(),
         })
         .setTimestamp();
+
+      if (originalMessageContent) {
+        restoredEmbed.setDescription(originalMessageContent);
+      }
 
       if (originalUser) {
         restoredEmbed.setAuthor({
@@ -430,6 +442,10 @@ async function handleUnsafeVerdict({
 
   if (staffChannel) {
     try {
+      const originalText = typeof message.content === 'string' && message.content.trim().length > 0
+        ? (message.content.length > 1020 ? message.content.slice(0, 1020) + '...' : message.content)
+        : null;
+
       const alertEmbed = new EmbedBuilder()
         .setTitle('🚨 Content Safety Flag')
         .setColor(0xed4245) // Red
@@ -449,6 +465,11 @@ async function handleUnsafeVerdict({
             value: formatDuration(config.timeoutMs),
             inline: true,
           },
+          ...(originalText ? [{
+            name: 'Original Message',
+            value: originalText,
+            inline: false,
+          }] : []),
           {
             name: 'Safety Categories',
             value: categoriesList,
