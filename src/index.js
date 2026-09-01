@@ -182,8 +182,30 @@ async function handleFalsePositiveApproval(interaction) {
   const parts = interaction.customId.split(':');
   const channelId = parts[1];
   const authorId = parts[2];
-  const encodedOriginalUrl = parts.slice(3).join(':');
-  const originalUrl = encodedOriginalUrl ? decodeURIComponent(encodedOriginalUrl) : null;
+
+  let originalUrl = null;
+  if (parts.length > 3) {
+    const encoded = parts.slice(3).join(':');
+    if (encoded) {
+      try {
+        originalUrl = decodeURIComponent(encoded);
+      } catch {
+        // Fallback
+      }
+    }
+  }
+
+  if (!originalUrl) {
+    const detailsField = interaction.message.embeds[0]?.fields?.find(
+      (f) => f.name === 'Source & Details'
+    );
+    if (detailsField?.value) {
+      const match = detailsField.value.match(/\[Media Link\]\((https?:\/\/[^\s)]+)\)/);
+      if (match) {
+        originalUrl = match[1];
+      }
+    }
+  }
 
   await interaction.deferUpdate();
 
@@ -456,9 +478,8 @@ async function handleUnsafeVerdict({
         .setFooter({ text: 'Lumia AI Media Moderation' })
         .setTimestamp();
 
-      const encodedUrl = originalUrl ? encodeURIComponent(originalUrl) : '';
       const approveButton = new ButtonBuilder()
-        .setCustomId(`approve_fp:${message.channel.id}:${message.author.id}:${encodedUrl}`)
+        .setCustomId(`approve_fp:${message.channel.id}:${message.author.id}`)
         .setLabel('Approve (False Positive)')
         .setStyle(ButtonStyle.Success)
         .setEmoji('✅');
