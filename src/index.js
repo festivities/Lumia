@@ -36,6 +36,13 @@ if (missingEnv.length > 0) {
   process.exit(1);
 }
 
+const isVerbose = process.env.VERBOSE === 'true' || process.env.VERBOSE === '1' || process.env.DEBUG === 'true';
+export function logVerbose(...args) {
+  if (isVerbose) {
+    console.log(...args);
+  }
+}
+
 // 2. Boot-time temp sweep (cleans leftover lumia-* temp files older than 24h)
 function sweepTempDirs() {
   try {
@@ -102,6 +109,9 @@ client.once('ready', async () => {
   }
 
   console.log('[Lumia] Ready and monitoring configured channels.');
+  if (isVerbose) {
+    console.log('[Lumia] Verbose logging is ENABLED.');
+  }
 });
 
 client.on('guildCreate', async (guild) => {
@@ -485,6 +495,8 @@ async function screenMessageLinks(message, config, channelInfo) {
   const candidateUrls = extractCandidateUrls(message);
   if (candidateUrls.length === 0) return;
 
+  logVerbose(`[Lumia] Found ${candidateUrls.length} media candidate URL(s) in message ${message.id} from ${message.author?.tag || message.author?.id} in #${message.channel.name}`);
+
   const maxBytes = config.maxFileMb * 1024 * 1024;
   const gates = {
     channelMode: channelInfo.mode,
@@ -503,6 +515,8 @@ async function screenMessageLinks(message, config, channelInfo) {
       gates
     );
     if (!classification) continue;
+
+    logVerbose(`[Lumia] Screening link media "${url}" (${classification}) from ${message.author?.tag || message.author?.id}...`);
 
     let verdict = null;
     let flaggedBuffer = fetched.buffer;
@@ -537,6 +551,10 @@ async function screenMessageLinks(message, config, channelInfo) {
     } catch (err) {
       console.error(`[Lumia] Failed screening link ${url}:`, err.message);
       continue; // Fail-open
+    }
+
+    if (verdict) {
+      logVerbose(`[Lumia] Link media verdict for "${url}": ${verdict.safe ? 'SAFE' : 'UNSAFE [' + (verdict.categories?.join(', ') || 'flagged') + ']'}`);
     }
 
     if (verdict && !verdict.safe) {
@@ -586,6 +604,8 @@ client.on('messageCreate', async (message) => {
   }
 
   if (targetAttachment && classification) {
+    logVerbose(`[Lumia] [Attachment] Screening "${targetAttachment.name || targetAttachment.id}" (${classification}) from ${message.author.tag} in #${message.channel.name}...`);
+
     // 3. Size check vs threshold
     if (targetAttachment.size > maxBytes) {
       console.warn(`[Lumia] Attachment ${targetAttachment.name || targetAttachment.id} (${targetAttachment.size} bytes) exceeds threshold (${maxBytes} bytes). Skipping.`);
@@ -637,6 +657,10 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    if (verdict) {
+      logVerbose(`[Lumia] [Attachment] Verdict for "${targetAttachment.name || targetAttachment.id}": ${verdict.safe ? 'SAFE' : 'UNSAFE [' + (verdict.categories?.join(', ') || 'flagged') + ']'}`);
+    }
+
     if (verdict && !verdict.safe) {
       await handleUnsafeVerdict({
         message,
@@ -666,6 +690,7 @@ client.on('messageUpdate', async (_oldMessage, newMessage) => {
     return;
   }
 
+  logVerbose(`[Lumia] Message ${newMessage.id} updated in #${newMessage.channel?.name}. Checking candidate links...`);
   await screenMessageLinks(newMessage, config, channelInfo);
 });
 

@@ -147,12 +147,20 @@ class SafetyQueue {
         .map((f) => (f.t !== null ? `t=${f.t}s` : `frame ${f.index + 1}`))
         .join(', ');
 
+      const isVerbose = process.env.VERBOSE === 'true' || process.env.VERBOSE === '1' || process.env.DEBUG === 'true';
+      if (isVerbose) {
+        console.log(`[Safety] Video screening (${classHint}): extracted ${frames.length} frame(s) from ${path.basename(filePath)}.`);
+      }
+
       for (const frame of frames) {
         if (jobSignal?.aborted) {
           throw jobSignal.reason || new Error('Video screening job aborted');
         }
 
         framesScreened++;
+        if (isVerbose) {
+          console.log(`[Safety] Evaluating frame ${framesScreened}/${frames.length} (${frame.t !== null ? `t=${frame.t}s` : `frame ${frame.index + 1}`})...`);
+        }
         const verdict = await evaluateImage(frame.buffer, 'image/jpeg', jobSignal);
 
         if (!verdict.safe) {
@@ -263,7 +271,12 @@ export async function evaluateImage(imageBuffer, contentType = 'image/png', jobS
         if (!content) {
           throw new Error('Response JSON missing choices[0].message.content');
         }
-        return parseVerdict(content);
+        const verdict = parseVerdict(content);
+        const isVerbose = process.env.VERBOSE === 'true' || process.env.VERBOSE === '1' || process.env.DEBUG === 'true';
+        if (isVerbose) {
+          console.log(`[Safety] Nemotron API response: ${verdict.safe ? 'SAFE' : 'UNSAFE'}${verdict.categories.length > 0 ? ` (${verdict.categories.join(', ')})` : ''}`);
+        }
+        return verdict;
       }
 
       if (response.status === 202) {
@@ -353,7 +366,12 @@ async function pollStatus(reqId, apiKey, jobSignal) {
       if (!content) {
         throw new Error('Status polling completed but response missing message content');
       }
-      return parseVerdict(content);
+      const verdict = parseVerdict(content);
+      const isVerbose = process.env.VERBOSE === 'true' || process.env.VERBOSE === '1' || process.env.DEBUG === 'true';
+      if (isVerbose) {
+        console.log(`[Safety] Nemotron async status response: ${verdict.safe ? 'SAFE' : 'UNSAFE'}${verdict.categories.length > 0 ? ` (${verdict.categories.join(', ')})` : ''}`);
+      }
+      return verdict;
     }
 
     if (res.status === 202) {
