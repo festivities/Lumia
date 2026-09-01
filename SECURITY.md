@@ -18,4 +18,4 @@ The following are explicitly not vulnerabilities inside Lumia:
 - Discord's native auto-embeds resolving internal IPs (Lumia does not control Discord's proxy).
 
 ## Reporting a Vulnerability
-Please do not create a public issue about security vulnerabilities. To prevent abuse of the vulnerability before a fix is available please create a private report here: https://github.com/your-org/lumia/security/advisories
+Please do not create a public issue about security vulnerabilities. To prevent abuse of the vulnerability before a fix is available please create a private report here: https://github.com/festivities/Lumia/security/advisories
