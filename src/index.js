@@ -1,3 +1,4 @@
+import './logger.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -525,7 +526,7 @@ async function handleUnsafeVerdict({
 
       await staffChannel.send(alertPayload);
     } catch (err) {
-      console.error('[Lumia] Failed to send alert to staff channel:', err);
+      console.error(`[Lumia] Failed to send alert to staff channel: ${err.message}`);
     }
   }
 }

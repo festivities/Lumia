@@ -10,9 +10,9 @@ const MODEL_NAME = 'nvidia/nemotron-3.5-content-safety';
 
 const MAX_QUEUE_SIZE = 50;
 const RETRY_DELAYS = [5000, 15000, 45000]; // Delays before retry attempts
-const PER_REQUEST_TIMEOUT_MS = 30000;
-const IMAGE_JOB_TIMEOUT_MS = 90000;
-const VIDEO_JOB_TIMEOUT_MS = 300000;
+const PER_REQUEST_TIMEOUT_MS = 60000;
+const IMAGE_JOB_TIMEOUT_MS = 300000;
+const VIDEO_JOB_TIMEOUT_MS = 900000;
 const MIN_CALL_INTERVAL_MS = 1600; // Throttle ceiling ~37.5 calls/min
 
 let lastCallAt = 0;
@@ -311,7 +311,7 @@ export async function evaluateImage(imageBuffer, contentType = 'image/png', jobS
         throw jobSignal.reason || err;
       }
 
-      const isNetworkError = err.name === 'TypeError' || err.name === 'FetchError' || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT';
+      const isNetworkError = err.name === 'TypeError' || err.name === 'FetchError' || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.name === 'TimeoutError' || err.name === 'AbortError';
       if (isNetworkError && attempt <= RETRY_DELAYS.length) {
         const delay = RETRY_DELAYS[attempt - 1];
         console.warn(`[Safety] Attempt ${attempt} encountered network error: ${err.message}. Retrying in ${delay}ms...`);
