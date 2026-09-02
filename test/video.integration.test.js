@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extractFrames, normalizeStillImage } from '../src/video.js';
+import { extractFrames, normalizeStillImage, MAX_STILL_PASSTHROUGH_BYTES } from '../src/video.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,6 +58,44 @@ describe('video integration extraction', () => {
 
     const buf = fs.readFileSync(webpPath);
     const norm = await normalizeStillImage(buf);
+
+    assert.equal(norm.contentType, 'image/jpeg');
+    assert.equal(norm.buffer[0], 0xff);
+    assert.equal(norm.buffer[1], 0xd8);
+  });
+
+  test('passes through small PNG without transcoding', async () => {
+    const pngPath = path.join(FIXTURES_DIR, 'sample_still.png');
+    if (!fs.existsSync(pngPath)) return;
+
+    const buf = fs.readFileSync(pngPath);
+    const norm = await normalizeStillImage(buf);
+
+    assert.equal(norm.contentType, 'image/png');
+    assert.equal(norm.buffer, buf);
+  });
+
+  test('transcodes PNG to JPEG when force is true', async () => {
+    const pngPath = path.join(FIXTURES_DIR, 'sample_still.png');
+    if (!fs.existsSync(pngPath)) return;
+
+    const buf = fs.readFileSync(pngPath);
+    const norm = await normalizeStillImage(buf, { force: true });
+
+    assert.equal(norm.contentType, 'image/jpeg');
+    assert.equal(norm.buffer[0], 0xff);
+    assert.equal(norm.buffer[1], 0xd8);
+  });
+
+  test('transcodes PNG to JPEG when buffer exceeds MAX_STILL_PASSTHROUGH_BYTES', async () => {
+    assert.equal(MAX_STILL_PASSTHROUGH_BYTES, 10 * 1024 * 1024);
+
+    const pngPath = path.join(FIXTURES_DIR, 'sample_still.png');
+    if (!fs.existsSync(pngPath)) return;
+
+    const baseBuf = fs.readFileSync(pngPath);
+    const largeBuf = Buffer.concat([baseBuf, Buffer.alloc(MAX_STILL_PASSTHROUGH_BYTES)]);
+    const norm = await normalizeStillImage(largeBuf);
 
     assert.equal(norm.contentType, 'image/jpeg');
     assert.equal(norm.buffer[0], 0xff);

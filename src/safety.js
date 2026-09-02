@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseVerdict } from './parse.js';
-import { extractFrames } from './video.js';
+import { extractFrames, normalizeStillImage } from './video.js';
 
 const NEMOTRON_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const STATUS_API_BASE = 'https://integrate.api.nvidia.com/v1/status';
@@ -229,8 +229,19 @@ export async function evaluateImage(imageBuffer, contentType = 'image/png', jobS
     throw new Error('NVIDIA_API_KEY environment variable is not set');
   }
 
-  const base64Data = imageBuffer.toString('base64');
-  const dataUri = `data:${contentType};base64,${base64Data}`;
+  // Guard: NVIDIA payload limit is 26,214,400 bytes (25 MB).
+  // In base64, ~18 MB binary produces ~24 MB payload.
+  // If imageBuffer exceeds this limit, normalize and downscale to JPEG first.
+  let bufferToEval = imageBuffer;
+  let evalContentType = contentType;
+  if (bufferToEval.length > 18 * 1024 * 1024) {
+    const norm = await normalizeStillImage(bufferToEval, { force: true });
+    bufferToEval = norm.buffer;
+    evalContentType = norm.contentType;
+  }
+
+  const base64Data = bufferToEval.toString('base64');
+  const dataUri = `data:${evalContentType};base64,${base64Data}`;
 
   const requestBody = {
     model: MODEL_NAME,

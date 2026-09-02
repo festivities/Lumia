@@ -112,7 +112,7 @@ Gating (what actually gets screened):
    - For `player-video`: write temp file, `enqueueVideo(path, 'player-video')`.
    - For `image`: run pure JS sniffer `sniffImage(buffer)`:
      - If animated (GIF, APNG, animated WebP/AVIF): write temp file, `enqueueVideo(path, 'autoplay-animation')`.
-     - If static JPEG/PNG: `enqueueImage(buffer, contentType)`.
+     - If static JPEG/PNG: `normalizeStillImage` (passthrough if ≤ 10 MB, transcoded/clamped to 2048px JPEG if > 10 MB to satisfy NVIDIA 25 MB payload limit) → `enqueueImage`.
      - If static other (WebP, AVIF, HEIC): `normalizeStillImage` → `enqueueImage`.
 3. **Link & Embed Screening** (`screenMessageLinks`):
    - Triggered on `messageCreate` (when no attachment flagged) and `messageUpdate` (when Discord unfurls embeds).
@@ -197,6 +197,7 @@ tools/smoke.js                live API & frame extraction smoke test
 - Link fetches are SSRF-guarded: http/https only, public IPs only, ≤ 3 validated redirects, stream capped.
 - Animated images are never sent to the API as-is (extraction always).
 - Frames leave as `image/jpeg` data URIs with the fixed prompt.
+- Images exceeding 10 MB or non-standard still formats are transcoded and clamped to max 2048px JPEG to respect NVIDIA's 25 MB (26,214,400 bytes) payload limit.
 - Temp files live in `os.tmpdir()/lumia-*`, cleaned in `finally`, swept at boot.
 - ffmpeg is single-threaded; at most one decode at a time.
 - Animation length is never a moderation criterion (only the filesize threshold is).

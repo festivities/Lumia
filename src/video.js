@@ -273,26 +273,34 @@ function sniffAvif(buf) {
   }
 }
 
+export const MAX_STILL_PASSTHROUGH_BYTES = 10 * 1024 * 1024; // 10 MB
+
 /**
- * Normalizes still images into JPEG or passes through verified PNG/JPEG.
+ * Normalizes a still image buffer (webp, avif, heic, large png/jpeg, etc.) to JPEG.
+ * Passthrough for standard PNG and JPEG under MAX_STILL_PASSTHROUGH_BYTES.
+ * Images over 10 MB or non-standard still formats are transcoded to JPEG with max 2048px dimension
+ * to guarantee payloads stay safely below NVIDIA's 25 MB (26,214,400 bytes) request ceiling.
  *
  * @param {Buffer} buffer
+ * @param {{ force?: boolean }} [options]
  * @returns {Promise<{ buffer: Buffer, contentType: 'image/png' | 'image/jpeg' }>}
  */
-export async function normalizeStillImage(buffer) {
+export async function normalizeStillImage(buffer, { force = false } = {}) {
   if (!Buffer.isBuffer(buffer)) {
     throw new Error('Expected Buffer for image normalization');
   }
 
-  // Passthrough for PNG and JPEG
-  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
-    return { buffer, contentType: 'image/png' };
-  }
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return { buffer, contentType: 'image/jpeg' };
+  // Passthrough for PNG and JPEG if within safe size threshold and not forced
+  if (!force && buffer.length <= MAX_STILL_PASSTHROUGH_BYTES) {
+    if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+      return { buffer, contentType: 'image/png' };
+    }
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+      return { buffer, contentType: 'image/jpeg' };
+    }
   }
 
-  // Transcode still webp/avif/heic/bmp to JPEG via single-threaded ffmpeg pipe
+  // Transcode still webp/avif/heic/bmp/large images to JPEG via single-threaded ffmpeg pipe
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn('ffmpeg', [
       '-v', 'error',
@@ -300,6 +308,7 @@ export async function normalizeStillImage(buffer) {
       '-filter_threads', '1',
       '-i', 'pipe:0',
       '-frames:v', '1',
+      '-vf', "scale='min(2048,iw)':'min(2048,ih)':force_original_aspect_ratio=decrease",
       '-q:v', '3',
       '-f', 'image2',
       '-c:v', 'mjpeg',
@@ -425,6 +434,7 @@ async function extractPlayerVideoFrames(filePath, tmpDir) {
       '-ss', t.toFixed(3),
       '-i', filePath,
       '-frames:v', '1',
+      '-vf', "scale='min(2048,iw)':'min(2048,ih)':force_original_aspect_ratio=decrease",
       '-q:v', '3',
       '-y', outPath,
     ]);
@@ -484,7 +494,7 @@ async function extractAnimationFrames(filePath, tmpDir) {
     '-threads', '1',
     '-filter_threads', '1',
     '-i', filePath,
-    '-vf', `select='${selectFilter}'`,
+    '-vf', `select='${selectFilter}',scale='min(2048,iw)':'min(2048,ih)':force_original_aspect_ratio=decrease`,
     '-vsync', 'vfr',
     '-q:v', '3',
     '-y', outPattern,
@@ -512,6 +522,7 @@ async function extractAnimationFrames(filePath, tmpDir) {
       '-filter_threads', '1',
       '-i', filePath,
       '-frames:v', '1',
+      '-vf', "scale='min(2048,iw)':'min(2048,ih)':force_original_aspect_ratio=decrease",
       '-q:v', '3',
       '-y', singleOut,
     ]);
