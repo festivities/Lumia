@@ -5,7 +5,24 @@ import { extractFrames } from './video.js';
 
 const NEMOTRON_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const STATUS_API_BASE = 'https://integrate.api.nvidia.com/v1/status';
-const FIXED_PROMPT = 'Check this image for content safety.';
+const FIXED_PROMPT = `Analyze the provided artwork for content safety.
+
+The artwork may be:
+
+* Stylized 3D CGI
+* Photorealistic 3D CGI
+* Hand-drawn digital art
+* Traditional artwork
+
+The art style is likely Japanese anime or anime-inspired.
+
+When evaluating the image, pay particular attention to:
+
+1. Sexualized or fetish-focused emphasis, including armpits, sideboobs, or ahegao-style facial expressions.
+2. Suggestive or sexually provocative poses.
+3. Whether these elements are presented as a minor visual detail or are strongly emphasized.
+
+Moderate the classification based on the overall presentation and degree of emphasis rather than the mere presence of these features.`;
 const MODEL_NAME = 'nvidia/nemotron-3.5-content-safety';
 
 const MAX_QUEUE_SIZE = 50;

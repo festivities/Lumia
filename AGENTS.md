@@ -85,7 +85,7 @@ Gating (what actually gets screened):
       "role": "user",
       "content": [
         { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,<b64>" } },
-        { "type": "text", "text": "Check this image for content safety." }
+        { "type": "text", "text": "<Detailed contextual prompt for anime/CGI artwork>" }
       ]
     }],
     "max_tokens": 200,
@@ -95,7 +95,7 @@ Gating (what actually gets screened):
     "chat_template_kwargs": { "request_categories": "/categories" }
   }
   ```
-- **Fixed prompt**: `Check this image for content safety.` (neutral constant).
+- **Fixed prompt**: A detailed multi-line prompt providing context for evaluating anime-style artwork, 3D CGI, and specific fetish characteristics (armpits, sideboobs, ahegao, etc.) to moderate based on emphasis rather than mere presence.
 - **Rate limit**: 40 requests/min (free tier). Throttled via 1.6s call spacing ceiling (~37.5 calls/min).
 - **Known flakiness**: Key intermittently returns 403 authorization failed; exponential backoff retries (5s/15s/45s) on 403/429/5xx and network errors; after retries exhausted → fail-open.
 - **HTTP 202**: Poll `GET /v1/status/{requestId}` with 1s interval up to 60s.
