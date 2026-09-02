@@ -258,7 +258,9 @@ async function handleFalsePositiveApproval(interaction) {
       if (originalUrl) {
         const fetched = await fetchGuarded(originalUrl, config.maxFileMb * 1024 * 1024).catch(() => null);
         if (fetched?.buffer) {
-          const fileName = path.basename(new URL(originalUrl).pathname) || 'restored_media';
+          let fileName = path.basename(new URL(originalUrl).pathname) || 'restored_media';
+          // Sanitize filename to prevent Discord builder URL validation errors (e.g. colons from :large)
+          fileName = fileName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
           restoredPayload = {
             embeds: [restoredEmbed],
             files: [{ attachment: fetched.buffer, name: fileName }],
