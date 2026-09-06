@@ -10,8 +10,10 @@ Lumia moderates a Blender 3D rendering community Discord server for any maliciou
 actors posting NSFW artwork — predominantly anime-style ("hentai"-type) content, 
 both hand-drawn 2D, 3D-rendered, animations, and videos.
 There is no human staff — Lumia is the first responder. Media posted or linked in
-configured channels are screened by NVIDIA''s `nvidia/nemotron-3.5-content-safety` model:
-- Its vision encoder is SigLIP (a general image-text encoder), so it generalizes
+configured channels are screened by a vision moderation model
+(`omni-moderation` by default, switchable to NVIDIA's
+`nvidia/nemotron-3.5-content-safety` via `MODERATION_PROVIDER`):
+- Nemotron's vision encoder is SigLIP (a general image-text encoder), so it generalizes
   to drawings, renders, and anime-style art — not just photographs.
 - Its safety-training data (VLGUARD, RTVLM, MM-SafetyBench, etc.) includes
   drawn/rendered sexual content, which photo-oriented detectors (e.g. Google
@@ -19,6 +21,15 @@ configured channels are screened by NVIDIA''s `nvidia/nemotron-3.5-content-safet
 - Its taxonomy includes sexual-content categories, which is what our flags will
   mostly be. Categories are treated as opaque strings — do not hardcode or
   filter on specific category names.
+
+**Provider toggle (owner-confirmed): `MODERATION_PROVIDER` in `.env` selects
+`omni-moderation` (default, OpenAI `omni-moderation-latest`) or `nemotron`
+(NVIDIA `nemotron-3.5-content-safety`).** Global switch, not per-guild.
+Only the selected provider's API key is required at boot. Omni flag policy is
+sexual-categories-only (`sexual`, `sexual/minors`); note `sexual/minors` is
+text-only per OpenAI docs so image-only inputs effectively gate on `sexual`.
+Dispatch lives in `evaluateImage` (`src/safety.js`); queue, sampling,
+short-circuit, and verdict shape are provider-agnostic.
 
 Note on false positives: SFW anime art is a daily occurrence in this community,
 so the real FP surface is "SFW anime-style render flagged as sexual". This is
@@ -100,6 +111,24 @@ Gating (what actually gets screened):
 - **Known flakiness**: Key intermittently returns 403 authorization failed; exponential backoff retries (5s/15s/45s) on 403/429/5xx and network errors; after retries exhausted → fail-open.
 - **HTTP 202**: Poll `GET /v1/status/{requestId}` with 1s interval up to 60s.
 
+## Verified Omni-Moderation API Contract
+
+- Endpoint: `POST https://api.openai.com/v1/moderations`
+  Headers: `Authorization: Bearer $OPENAI_API_KEY`, `Content-Type: application/json`
+- Request body (image-only input — user message text is never sent):
+  ```json
+  {
+    "model": "omni-moderation-latest",
+    "input": [{ "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,<b64>" } }]
+  }
+  ```
+- Response: `{ results: [{ flagged, categories: { sexual, "sexual/minors", ... }, category_scores, ... }] }`.
+  Unsafe iff a sexual category is true (`parseOmniResult`); top-level `flagged`
+  (violence/self-harm) alone does NOT trigger action.
+- Image files up to 20 MB → pre-normalize guard is ~14 MB binary (base64 inflation).
+- Retries (5s/15s/45s) on 429/5xx and network errors only; 401/403 fail fast → fail-open.
+- No fixed prompt, no 202 polling, no 1.6s throttle requirement (shared limiter reused).
+
 ---
 
 ## Moderation Flow (`messageCreate` & `messageUpdate`)
@@ -112,7 +141,7 @@ Gating (what actually gets screened):
    - For `player-video`: write temp file, `enqueueVideo(path, 'player-video')`.
    - For `image`: run pure JS sniffer `sniffImage(buffer)`:
      - If animated (GIF, APNG, animated WebP/AVIF): write temp file, `enqueueVideo(path, 'autoplay-animation')`.
-     - If static JPEG/PNG: `normalizeStillImage` (passthrough if ≤ 10 MB, transcoded/clamped to 2048px JPEG if > 10 MB to satisfy NVIDIA 25 MB payload limit) → `enqueueImage`.
+     - If static JPEG/PNG: `normalizeStillImage` (passthrough if ≤ 10 MB, transcoded/clamped to 2048px JPEG if > 10 MB to satisfy payload limits) → `enqueueImage`.
      - If static other (WebP, AVIF, HEIC): `normalizeStillImage` → `enqueueImage`.
 3. **Link & Embed Screening** (`screenMessageLinks`):
    - Triggered on `messageCreate` (when no attachment flagged) and `messageUpdate` (when Discord unfurls embeds).
@@ -161,9 +190,10 @@ src/index.js                  application bootstrap, events, moderation routing,
 src/video.js                  classification, sniffers, still normalization, frame extraction
 src/links.js                  URL extraction, SSRF-guarded fetcher, dedupe cache
 src/settings.js               atomic JSON configuration store & schema migration
-src/safety.js                 Nemotron client, rate limiter, image/video screening queues
+src/safety.js                 provider dispatch + clients, rate limiter, image/video screening queues
 src/commands.js               /lumia slash command definitions and handlers
-src/parse.js                  pure parsers for verdicts and durations
+src/parse.js                  pure parsers for verdicts (Nemotron + omni), durations
+test/omni.test.js             omni-moderation parser & provider selection tests
 test/classify.test.js         attachment & link gating tests
 test/frames.test.js           adaptive frame calculation & dedupe tests
 test/links.test.js            URL extraction & SSRF guard tests
@@ -197,7 +227,7 @@ tools/smoke.js                live API & frame extraction smoke test
 - Link fetches are SSRF-guarded: http/https only, public IPs only, ≤ 3 validated redirects, stream capped.
 - Animated images are never sent to the API as-is (extraction always).
 - Frames leave as `image/jpeg` data URIs with the fixed prompt.
-- Images exceeding 10 MB or non-standard still formats are transcoded and clamped to max 2048px JPEG to respect NVIDIA's 25 MB (26,214,400 bytes) payload limit.
+- Images exceeding 10 MB or non-standard still formats are transcoded and clamped to max 2048px JPEG to respect payload limits (NVIDIA 25 MB; omni-moderation 20 MB, with a ~14 MB pre-normalize guard on its path).
 - Temp files live in `os.tmpdir()/lumia-*`, cleaned in `finally`, swept at boot.
 - ffmpeg is single-threaded; at most one decode at a time.
 - Animation length is never a moderation criterion (only the filesize threshold is).

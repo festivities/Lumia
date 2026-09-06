@@ -50,6 +50,41 @@ export function parseVerdict(content) {
 }
 
 /**
+ * Sexual categories that trigger action under the omni-moderation flag policy.
+ * Note: per OpenAI docs `sexual/minors` is text-only, so image-only inputs
+ * effectively gate on `sexual` alone.
+ */
+export const OMNI_SEXUAL_CATEGORIES = ['sexual', 'sexual/minors'];
+
+/**
+ * Maps an OpenAI omni-moderation response to a Lumia verdict.
+ * Decides purely on the sexual categories (ignores the top-level `flagged`
+ * boolean, which also fires for violence/self-harm we don't act on).
+ *
+ * @param {object} json Parsed JSON from POST /v1/moderations
+ * @returns {{ safe: boolean, categories: string[] }}
+ * @throws {Error} If the response shape is missing results[0].categories
+ */
+export function parseOmniResult(json) {
+  const result = json?.results?.[0];
+  if (!result || typeof result !== 'object') {
+    throw new Error('Missing or unparseable "results[0]" in omni-moderation response');
+  }
+
+  const cats = result.categories;
+  if (!cats || typeof cats !== 'object') {
+    throw new Error('Missing or unparseable "categories" in omni-moderation response');
+  }
+
+  const fired = OMNI_SEXUAL_CATEGORIES.filter((c) => cats[c] === true);
+  if (fired.length > 0) {
+    return { safe: false, categories: fired };
+  }
+
+  return { safe: true, categories: [] };
+}
+
+/**
  * Parses a duration string into milliseconds.
  * Accepts formats like "10m", "1h30m", "2d", "45s", "1d12h".
  * Clamps the output between 1,000ms (1s) and 2,419,200,000ms (28d).

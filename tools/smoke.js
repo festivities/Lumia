@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { evaluateImage } from '../src/safety.js';
+import { evaluateImage, getProvider } from '../src/safety.js';
 import { extractFrames } from '../src/video.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,10 +11,14 @@ const FIXTURES_DIR = path.join(__dirname, '..', 'test', 'fixtures');
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 const imageBuffer = Buffer.from(TINY_PNG_BASE64, 'base64');
 
-console.log('[Smoke Test] 1/2: Testing Nemotron-3.5 Content Safety API validation with test image...');
+console.log(`[Smoke Test] 1/2: Testing ${getProvider() === 'nemotron' ? 'Nemotron-3.5 Content Safety' : 'omni-moderation'} API validation with test image...`);
 
-if (!process.env.NVIDIA_API_KEY) {
+if (getProvider() === 'nemotron' && !process.env.NVIDIA_API_KEY) {
   console.error('[Smoke Test] ERROR: NVIDIA_API_KEY is not set in environment or .env');
+  process.exit(1);
+}
+if (getProvider() !== 'nemotron' && !process.env.OPENAI_API_KEY) {
+  console.error('[Smoke Test] ERROR: OPENAI_API_KEY is not set in environment or .env');
   process.exit(1);
 }
 

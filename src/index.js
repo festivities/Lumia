@@ -12,7 +12,7 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 import { settings } from './settings.js';
-import { enqueueImage, enqueueVideo } from './safety.js';
+import { enqueueImage, enqueueVideo, getProvider } from './safety.js';
 import { commandData, handleCommand } from './commands.js';
 import { formatDuration } from './parse.js';
 import {
@@ -26,9 +26,13 @@ import {
   dedupeCache,
 } from './links.js';
 
-// 1. Startup validation: ensure required env vars exist
+// 1. Startup validation: ensure required env vars exist (key for the active provider only)
 const missingEnv = [];
-if (!process.env.NVIDIA_API_KEY) missingEnv.push('NVIDIA_API_KEY');
+if (getProvider() === 'nemotron') {
+  if (!process.env.NVIDIA_API_KEY) missingEnv.push('NVIDIA_API_KEY');
+} else {
+  if (!process.env.OPENAI_API_KEY) missingEnv.push('OPENAI_API_KEY');
+}
 if (!process.env.DISCORD_TOKEN) missingEnv.push('DISCORD_TOKEN');
 
 if (missingEnv.length > 0) {
@@ -110,6 +114,7 @@ client.once('ready', async () => {
   }
 
   console.log('[Lumia] Ready and monitoring configured channels.');
+  console.log(`[Lumia] Moderation provider: ${getProvider() === 'nemotron' ? 'nvidia/nemotron-3.5-content-safety' : 'omni-moderation-latest'}.`);
   if (isVerbose) {
     console.log('[Lumia] Verbose logging is ENABLED.');
   }

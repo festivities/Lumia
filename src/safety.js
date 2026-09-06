@@ -1,10 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseVerdict } from './parse.js';
+import { parseVerdict, parseOmniResult } from './parse.js';
 import { extractFrames, normalizeStillImage } from './video.js';
 
 const NEMOTRON_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const STATUS_API_BASE = 'https://integrate.api.nvidia.com/v1/status';
+const OMNI_API_URL = 'https://api.openai.com/v1/moderations';
+const OMNI_MODEL = 'omni-moderation-latest';
+// ponytail: Omni image limit is 20 MB (vs NVIDIA 25 MB); ~14 MB binary ≈ 19 MB base64.
+const OMNI_MAX_BINARY_BYTES = 14 * 1024 * 1024;
 const FIXED_PROMPT = `Analyze the provided artwork for content safety.
 
 The artwork may be:
@@ -216,7 +220,20 @@ class SafetyQueue {
 }
 
 /**
- * Sends image data to NVIDIA Nemotron API with retries, rate limiting, and 202 async polling.
+ * Resolves the active moderation provider from the environment.
+ * Any value containing "nemotron" selects Nemotron; anything else
+ * (including unset) defaults to omni-moderation.
+ *
+ * @returns {'omni' | 'nemotron'}
+ */
+export function getProvider() {
+  const raw = (process.env.MODERATION_PROVIDER || 'omni-moderation').toLowerCase().trim();
+  return raw.includes('nemotron') ? 'nemotron' : 'omni';
+}
+
+/**
+ * Dispatches image evaluation to the configured provider.
+ * Queue, short-circuit, and verdict shape are provider-agnostic.
  *
  * @param {Buffer} imageBuffer
  * @param {string} contentType
@@ -224,6 +241,127 @@ class SafetyQueue {
  * @returns {Promise<{ safe: boolean, categories: string[] }>}
  */
 export async function evaluateImage(imageBuffer, contentType = 'image/png', jobSignal = null) {
+  if (getProvider() === 'nemotron') {
+    return evaluateImageNemotron(imageBuffer, contentType, jobSignal);
+  }
+  return evaluateImageOmni(imageBuffer, contentType, jobSignal);
+}
+
+/**
+ * Sends image data to OpenAI omni-moderation (image-only input, no text).
+ *
+ * @param {Buffer} imageBuffer
+ * @param {string} contentType
+ * @param {AbortSignal} jobSignal
+ * @returns {Promise<{ safe: boolean, categories: string[] }>}
+ */
+export async function evaluateImageOmni(imageBuffer, contentType = 'image/png', jobSignal = null) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is not set');
+  }
+
+  let bufferToEval = imageBuffer;
+  let evalContentType = contentType;
+  if (bufferToEval.length > OMNI_MAX_BINARY_BYTES) {
+    const norm = await normalizeStillImage(bufferToEval, { force: true });
+    bufferToEval = norm.buffer;
+    evalContentType = norm.contentType;
+  }
+
+  const dataUri = `data:${evalContentType};base64,${bufferToEval.toString('base64')}`;
+  const requestBody = {
+    model: OMNI_MODEL,
+    input: [{ type: 'image_url', image_url: { url: dataUri } }],
+  };
+
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  };
+
+  let lastError = null;
+  const maxAttempts = RETRY_DELAYS.length + 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (jobSignal?.aborted) {
+      throw jobSignal.reason || new Error('Job aborted before attempt');
+    }
+
+    const now = Date.now();
+    const waitTime = Math.max(0, MIN_CALL_INTERVAL_MS - (now - lastCallAt));
+    if (waitTime > 0) {
+      await sleep(waitTime, jobSignal);
+    }
+    lastCallAt = Date.now();
+
+    try {
+      const requestSignal = AbortSignal.any
+        ? AbortSignal.any([AbortSignal.timeout(PER_REQUEST_TIMEOUT_MS), ...(jobSignal ? [jobSignal] : [])])
+        : AbortSignal.timeout(PER_REQUEST_TIMEOUT_MS);
+
+      const response = await fetch(OMNI_API_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: requestSignal,
+      });
+
+      if (response.ok) {
+        const json = await response.json();
+        const verdict = parseOmniResult(json);
+        const isVerbose = process.env.VERBOSE === 'true' || process.env.VERBOSE === '1' || process.env.DEBUG === 'true';
+        if (isVerbose) {
+          console.log(`[Safety] Omni-moderation response: ${verdict.safe ? 'SAFE' : 'UNSAFE'}${verdict.categories.length > 0 ? ` (${verdict.categories.join(', ')})` : ''}`);
+        }
+        return verdict;
+      }
+
+      const bodyText = await response.text().catch(() => '');
+      const bodySnippet = bodyText.slice(0, 200);
+      const isRetryable = response.status === 429 || (response.status >= 500 && response.status < 600);
+      const errorMsg = `HTTP ${response.status}: ${bodySnippet}`;
+
+      if (isRetryable && attempt <= RETRY_DELAYS.length) {
+        const delay = RETRY_DELAYS[attempt - 1];
+        console.warn(`[Safety] Attempt ${attempt} failed with ${errorMsg}. Retrying in ${delay}ms...`);
+        await sleep(delay, jobSignal);
+        continue;
+      }
+
+      throw new Error(`Omni-moderation API error: ${errorMsg}`);
+    } catch (err) {
+      lastError = err;
+      if (jobSignal?.aborted) {
+        throw jobSignal.reason || err;
+      }
+
+      const isNetworkError = err.name === 'TypeError' || err.name === 'FetchError' || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.name === 'TimeoutError' || err.name === 'AbortError';
+      if (isNetworkError && attempt <= RETRY_DELAYS.length) {
+        const delay = RETRY_DELAYS[attempt - 1];
+        console.warn(`[Safety] Attempt ${attempt} encountered network error: ${err.message}. Retrying in ${delay}ms...`);
+        await sleep(delay, jobSignal);
+        continue;
+      }
+
+      if (attempt > RETRY_DELAYS.length || !isNetworkError) {
+        throw err;
+      }
+    }
+  }
+
+  throw lastError || new Error('Omni-moderation screening failed after all retries');
+}
+
+/**
+ * Sends image data to NVIDIA Nemotron API with retries, rate limiting, and 202 async polling.
+ *
+ * @param {Buffer} imageBuffer
+ * @param {string} contentType
+ * @param {AbortSignal} jobSignal
+ * @returns {Promise<{ safe: boolean, categories: string[] }>}
+ */
+export async function evaluateImageNemotron(imageBuffer, contentType = 'image/png', jobSignal = null) {
   const apiKey = process.env.NVIDIA_API_KEY;
   if (!apiKey) {
     throw new Error('NVIDIA_API_KEY environment variable is not set');
@@ -452,5 +590,8 @@ export default {
   enqueueImage,
   enqueueVideo,
   evaluateImage,
+  evaluateImageNemotron,
+  evaluateImageOmni,
+  getProvider,
   safetyQueue,
 };
