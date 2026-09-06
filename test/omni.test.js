@@ -1,7 +1,7 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseOmniResult } from '../src/parse.js';
-import { getProvider } from '../src/safety.js';
+import { getProvider, retryDelayMs, rateLimitHint } from '../src/safety.js';
 
 describe('parseOmniResult', () => {
   test('maps clean image to safe verdict', () => {
@@ -42,6 +42,47 @@ describe('parseOmniResult', () => {
     assert.throws(() => parseOmniResult({ results: [] }), /results\[0\]/);
     assert.throws(() => parseOmniResult({ results: [{ flagged: false }] }), /categories/);
     assert.throws(() => parseOmniResult(null), /results\[0\]/);
+  });
+});
+
+describe('retryDelayMs', () => {
+  test('falls back to scheduled backoff with jitter when no headers', () => {
+    const res = new Response('{}', { status: 429 });
+    const d1 = retryDelayMs(res, 1);
+    assert.ok(d1 >= 5000 && d1 <= 6000, `attempt 1 delay ${d1} out of range`);
+    const d3 = retryDelayMs(res, 3);
+    assert.ok(d3 >= 45000 && d3 <= 46000, `attempt 3 delay ${d3} out of range`);
+  });
+
+  test('honors retry-after-ms server guidance over shorter schedule', () => {
+    const res = new Response('{}', { status: 429, headers: { 'retry-after-ms': '20000' } });
+    const d = retryDelayMs(res, 1);
+    assert.ok(d >= 20000 && d <= 21000, `delay ${d} out of range`);
+  });
+
+  test('honors retry-after seconds header', () => {
+    const res = new Response('{}', { status: 429, headers: { 'retry-after': '10' } });
+    const d = retryDelayMs(res, 1);
+    assert.ok(d >= 10000 && d <= 11000, `delay ${d} out of range`);
+  });
+
+  test('caps delays at 60s', () => {
+    const res = new Response('{}', { status: 429, headers: { 'retry-after-ms': '600000' } });
+    assert.ok(retryDelayMs(res, 1) <= 60000);
+  });
+});
+
+describe('rateLimitHint', () => {
+  test('summarizes rate-limit headers', () => {
+    const res = new Response('{}', {
+      status: 429,
+      headers: { 'x-ratelimit-remaining-requests': '0', 'x-ratelimit-reset-requests': '12s' },
+    });
+    assert.equal(rateLimitHint(res), ' [ratelimit remaining=0 reset=12s]');
+  });
+
+  test('returns empty string when headers absent', () => {
+    assert.equal(rateLimitHint(new Response('{}', { status: 429 })), '');
   });
 });
 

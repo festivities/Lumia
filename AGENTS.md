@@ -126,7 +126,8 @@ Gating (what actually gets screened):
   Unsafe iff a sexual category is true (`parseOmniResult`); top-level `flagged`
   (violence/self-harm) alone does NOT trigger action.
 - Image files up to 20 MB → pre-normalize guard is ~14 MB binary (base64 inflation).
-- Retries (5s/15s/45s) on 429/5xx and network errors only; 401/403 fail fast → fail-open.
+- Retries honor `Retry-After`/`retry-after-ms` (capped 60s, jittered) on 429/5xx and network errors only; 401/403 fail fast → fail-open.
+- Persistent 429s open a 5m fast fail-open circuit breaker (3 consecutive 429-exhausted jobs); usual cause is an unprovisioned OpenAI org (no prepaid credits) — check Billing + Limits.
 - No fixed prompt, no 202 polling, no 1.6s throttle requirement (shared limiter reused).
 
 ---

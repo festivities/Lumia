@@ -35,6 +35,14 @@ const PER_REQUEST_TIMEOUT_MS = 60000;
 const IMAGE_JOB_TIMEOUT_MS = 300000;
 const VIDEO_JOB_TIMEOUT_MS = 900000;
 const MIN_CALL_INTERVAL_MS = 1600; // Throttle ceiling ~37.5 calls/min
+const MAX_RETRY_DELAY_MS = 60000; // Never wait longer than 60s between attempts
+// ponytail: consecutive 429-exhausted jobs open a 5m fast fail-open breaker so a
+// throttled account doesn't burn ~65s of serialized queue time per job. Resets on success.
+const OMNI_BREAKER_THRESHOLD = 3;
+const OMNI_BREAKER_COOLDOWN_MS = 5 * 60 * 1000;
+
+let omniConsecutive429Jobs = 0;
+let omniBreakerOpenUntil = 0;
 
 let lastCallAt = 0;
 
@@ -232,6 +240,60 @@ export function getProvider() {
 }
 
 /**
+ * Computes the wait before the next retry: honors the server's Retry-After
+ * guidance when present, else scheduled backoff with jitter. Capped at 60s.
+ *
+ * @param {Response} response
+ * @param {number} attempt 1-based attempt number just failed
+ * @returns {number} Delay in ms
+ */
+export function retryDelayMs(response, attempt) {
+  const scheduled = RETRY_DELAYS[attempt - 1] ?? RETRY_DELAYS[RETRY_DELAYS.length - 1];
+  let serverMs = NaN;
+  try {
+    const msHeader = response?.headers?.get?.('retry-after-ms');
+    const sHeader = response?.headers?.get?.('retry-after');
+    if (msHeader !== null && msHeader !== undefined) serverMs = Number(msHeader);
+    else if (sHeader !== null && sHeader !== undefined) serverMs = Number(sHeader) * 1000;
+  } catch {
+    // Ignore malformed headers, fall back to scheduled backoff
+  }
+  const base = Number.isFinite(serverMs) && serverMs >= 0 ? Math.max(serverMs, scheduled) : scheduled;
+  return Math.min(Math.round(base + Math.random() * 1000), MAX_RETRY_DELAY_MS);
+}
+
+/**
+ * One-line summary of OpenAI rate-limit headers for 429 diagnostics.
+ *
+ * @param {Response} response
+ * @returns {string} '' when headers are absent
+ */
+export function rateLimitHint(response) {
+  try {
+    const remaining = response?.headers?.get?.('x-ratelimit-remaining-requests')
+      ?? response?.headers?.get?.('x-ratelimit-remaining-tokens');
+    const reset = response?.headers?.get?.('x-ratelimit-reset-requests')
+      ?? response?.headers?.get?.('x-ratelimit-reset-tokens');
+    if (remaining == null && reset == null) return '';
+    return ` [ratelimit remaining=${remaining ?? '?'} reset=${reset ?? '?'}]`;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Records a job whose retries were exhausted by 429s. Opens the circuit
+ * breaker after consecutive occurrences; any success resets the count.
+ */
+function noteOmni429Exhausted() {
+  omniConsecutive429Jobs++;
+  if (omniConsecutive429Jobs >= OMNI_BREAKER_THRESHOLD) {
+    omniBreakerOpenUntil = Date.now() + OMNI_BREAKER_COOLDOWN_MS;
+    console.warn('[Safety] Omni-moderation 429d persistently — circuit breaker open for 5m (fail-open, auto-recovers). Likely cause: OpenAI org not provisioned (add payment method + prepaid credits), model not allowed for the key/project, or tier limits. Check Billing + organization Limits.');
+  }
+}
+
+/**
  * Dispatches image evaluation to the configured provider.
  * Queue, short-circuit, and verdict shape are provider-agnostic.
  *
@@ -261,6 +323,10 @@ export async function evaluateImageOmni(imageBuffer, contentType = 'image/png', 
     throw new Error('OPENAI_API_KEY environment variable is not set');
   }
 
+  if (Date.now() < omniBreakerOpenUntil) {
+    throw new Error('Omni-moderation circuit breaker open after persistent 429s: failing open until cooldown expires');
+  }
+
   let bufferToEval = imageBuffer;
   let evalContentType = contentType;
   if (bufferToEval.length > OMNI_MAX_BINARY_BYTES) {
@@ -281,6 +347,7 @@ export async function evaluateImageOmni(imageBuffer, contentType = 'image/png', 
   };
 
   let lastError = null;
+  let saw429 = false;
   const maxAttempts = RETRY_DELAYS.length + 1;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -310,6 +377,7 @@ export async function evaluateImageOmni(imageBuffer, contentType = 'image/png', 
       if (response.ok) {
         const json = await response.json();
         const verdict = parseOmniResult(json);
+        omniConsecutive429Jobs = 0;
         const isVerbose = process.env.VERBOSE === 'true' || process.env.VERBOSE === '1' || process.env.DEBUG === 'true';
         if (isVerbose) {
           console.log(`[Safety] Omni-moderation response: ${verdict.safe ? 'SAFE' : 'UNSAFE'}${verdict.categories.length > 0 ? ` (${verdict.categories.join(', ')})` : ''}`);
@@ -322,14 +390,17 @@ export async function evaluateImageOmni(imageBuffer, contentType = 'image/png', 
       const isRetryable = response.status === 429 || (response.status >= 500 && response.status < 600);
       const errorMsg = `HTTP ${response.status}: ${bodySnippet}`;
 
+      if (response.status === 429) saw429 = true;
+
       if (isRetryable && attempt <= RETRY_DELAYS.length) {
-        const delay = RETRY_DELAYS[attempt - 1];
-        console.warn(`[Safety] Attempt ${attempt} failed with ${errorMsg}. Retrying in ${delay}ms...`);
+        const delay = retryDelayMs(response, attempt);
+        console.warn(`[Safety] Attempt ${attempt} failed with ${errorMsg}.${rateLimitHint(response)} Retrying in ${delay}ms...`);
         await sleep(delay, jobSignal);
         continue;
       }
 
-      throw new Error(`Omni-moderation API error: ${errorMsg}`);
+      if (saw429) noteOmni429Exhausted();
+      throw new Error(`Omni-moderation API error: ${errorMsg}${saw429 ? ' (persistent 429: check OpenAI billing/credits, project model access, and organization Limits)' : ''}`);
     } catch (err) {
       lastError = err;
       if (jobSignal?.aborted) {
